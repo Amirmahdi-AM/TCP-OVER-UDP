@@ -111,7 +111,9 @@ void TCPO_Socket::_listener_entry()
                 received_packet.deserialize(std::vector<char>(buffer, buffer + bytes_received));
                 if (received_packet.flags & ACK)
                 {
-                    Connection new_connection;
+                    std::cout << "Final ACK received. Connection established.";
+                    auto new_connection = std::make_shared<Connection>(sockfd, client_addr);
+                    new_connection->start();
 
                     lock.lock();
                     accept_queue.push({new_connection, client_addr});
@@ -124,7 +126,7 @@ void TCPO_Socket::_listener_entry()
     }
 }
 
-std::pair<Connection, sockaddr_in> TCPO_Socket::accept()
+std::pair<std::shared_ptr<Connection>, sockaddr_in> TCPO_Socket::accept()
 {
     std::unique_lock<std::mutex> lock(queue_mutex);
 

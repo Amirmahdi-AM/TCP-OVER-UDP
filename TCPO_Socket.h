@@ -19,7 +19,7 @@ public:
     bool bind(const std::string &ip_address, uint16_t port);
 
     bool listen(int backlog = 5);
-    std::pair<Connection, sockaddr_in> accept();
+    std::pair<std::shared_ptr<Connection>, sockaddr_in> accept();
 
     bool connect(const std::string &ip_address, uint16_t port);
 
@@ -30,7 +30,7 @@ private:
     std::thread listener_thread;
     void _listener_entry();
 
-    std::queue<std::pair<Connection, sockaddr_in>> accept_queue;
+    std::queue<std::pair<std::shared_ptr<Connection>, sockaddr_in>> accept_queue;
     int backlog_size;
     
     std::mutex queue_mutex;
