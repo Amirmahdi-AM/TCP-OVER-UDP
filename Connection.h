@@ -18,6 +18,8 @@ enum class ConnectionState
     FIN_WAIT_1,
     FIN_WAIT_2,
     TIME_WAIT,
+    CLOSE_WAIT,
+    LAST_ACK,
     CLOSED
 };
 
@@ -61,6 +63,7 @@ private:
     uint32_t next_seq_num_to_expect;
     uint32_t duplicate_ack_count;
     uint32_t last_ack_num_for_retransmit;
+    uint32_t fin_sent_seq;
 
     std::thread manager_thread;
     std::mutex mtx;

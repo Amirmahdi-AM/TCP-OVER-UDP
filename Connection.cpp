@@ -53,7 +53,50 @@ size_t Connection::receive(std::vector<char> &buffer, size_t max_len)
     return bytes_to_copy;
 }
 
-void Connection::close() { /* TODO */ }
+void Connection::close()
+{
+    std::unique_lock<std::mutex> lock(mtx);
+
+    if (state == ConnectionState::ESTABLISHED)
+    {
+        state = ConnectionState::FIN_WAIT_1;
+        std::cout << "Connection state changed to FIN_WAIT_1" << std::endl;
+
+        Packet fin_packet;
+        fin_packet.flags = FIN | ACK;
+        fin_packet.seq_num = next_seq_num_to_send;
+        fin_packet.ack_num = next_seq_num_to_expect;
+
+        fin_sent_seq = fin_packet.seq_num;
+        next_seq_num_to_send++;
+
+        lock.unlock();
+
+        std::vector<char> buffer;
+        fin_packet.serialize(buffer);
+        sendto(main_sockfd, buffer.data(), buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+        std::cout << "Sent FIN packet." << std::endl;
+    }
+    else if (state == ConnectionState::CLOSE_WAIT)
+    {
+        state = ConnectionState::LAST_ACK;
+        std::cout << "Connection state changed to LAST_ACK" << std::endl;
+
+        Packet fin_packet;
+        fin_packet.flags = FIN | ACK;
+        fin_packet.seq_num = next_seq_num_to_send;
+        fin_packet.ack_num = next_seq_num_to_expect;
+
+        lock.unlock();
+
+        std::vector<char> buffer;
+        fin_packet.serialize(buffer);
+        sendto(main_sockfd, buffer.data(), buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+        std::cout << "Sent FIN packet from CLOSE_WAIT." << std::endl;
+    }
+}
 void Connection::process_incoming_packet(const Packet &packet)
 {
     std::lock_guard<std::mutex> lock(mtx);
@@ -100,7 +143,62 @@ void Connection::_manager_entry()
             Packet packet = incoming_packet_queue.front();
             incoming_packet_queue.pop();
 
-            if (packet.data_length > 0)
+            if (packet.flags & FIN)
+            {
+                std::cout << "FIN packet received. Current state: " << (int)state << std::endl;
+
+                if (state == ConnectionState::ESTABLISHED)
+                {
+                    state = ConnectionState::CLOSE_WAIT;
+
+                    Packet ack_packet;
+                    ack_packet.flags = ACK;
+                    ack_packet.ack_num = packet.seq_num + 1;
+                    ack_packet.seq_num = next_seq_num_to_send;
+
+                    std::vector<char> buffer;
+                    ack_packet.serialize(buffer);
+                    sendto(main_sockfd, buffer.data(), buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+                    cv_receive.notify_all();
+                }
+                else if (state == ConnectionState::FIN_WAIT_1)
+                {
+                    state = ConnectionState::TIME_WAIT;
+
+                    Packet ack_packet;
+                    ack_packet.flags = ACK;
+                    ack_packet.ack_num = packet.seq_num + 1;
+                    ack_packet.seq_num = next_seq_num_to_send;
+
+                    lock.unlock();
+
+                    std::vector<char> buffer;
+                    ack_packet.serialize(buffer);
+                    sendto(main_sockfd, buffer.data(), buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+                    active = false;
+                }
+                else if (state == ConnectionState::FIN_WAIT_2)
+                {
+                    state = ConnectionState::TIME_WAIT;
+
+                    Packet ack_packet;
+                    ack_packet.flags = ACK;
+                    ack_packet.ack_num = packet.seq_num + 1;
+                    ack_packet.seq_num = next_seq_num_to_send;
+
+                    lock.unlock();
+
+                    std::vector<char> buffer;
+                    ack_packet.serialize(buffer);
+                    sendto(main_sockfd, buffer.data(), buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+                    active = false;
+                }
+            }
+
+            if (packet.data_length > 0 && state == ConnectionState::ESTABLISHED)
             {
                 if (packet.seq_num == next_seq_num_to_expect)
                 {
@@ -137,41 +235,62 @@ void Connection::_manager_entry()
             {
                 uint32_t ack_num = packet.ack_num;
 
-                if (ack_num > last_ack_received)
+                if (state == ConnectionState::FIN_WAIT_1)
                 {
-                    last_ack_received = ack_num;
-                    for (auto it = unacked_packets.begin(); it != unacked_packets.end();)
+                    if (packet.ack_num == fin_sent_seq + 1)
                     {
-                        if (it->first < ack_num)
-                        {
-                            it = unacked_packets.erase(it);
-                        }
-                        else
-                        {
-                            ++it;
-                        }
+                        state = ConnectionState::FIN_WAIT_2;
+                        std::cout << "Connection state changed to FIN_WAIT_2" << std::endl;
                     }
-                    duplicate_ack_count = 0;
                 }
-                else if (ack_num == last_ack_received)
+                else if (state == ConnectionState::LAST_ACK)
                 {
-                    duplicate_ack_count++;
-                    if (duplicate_ack_count == 3)
+                    if (packet.ack_num == fin_sent_seq + 1)
                     {
-                        std::cout << "3 duplicate ACKs received. Triggering Fast Retransmit for SEQ: " << ack_num << std::endl;
+                        state = ConnectionState::CLOSED;
+                        active = false;
+                        std::cout << "Connection CLOSED." << std::endl;
+                    }
+                }
 
-                        auto it = unacked_packets.find(ack_num);
-                        if (it != unacked_packets.end())
+                else
+                {
+                    if (ack_num > last_ack_received)
+                    {
+                        last_ack_received = ack_num;
+                        for (auto it = unacked_packets.begin(); it != unacked_packets.end();)
                         {
-                            auto &in_flight_packet = it->second;
-
-                            std::vector<char> packet_buffer;
-                            in_flight_packet.packet.serialize(packet_buffer);
-                            sendto(main_sockfd, packet_buffer.data(), packet_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
-
-                            in_flight_packet.send_time = std::chrono::steady_clock::now();
+                            if (it->first < ack_num)
+                            {
+                                it = unacked_packets.erase(it);
+                            }
+                            else
+                            {
+                                ++it;
+                            }
                         }
                         duplicate_ack_count = 0;
+                    }
+                    else if (ack_num == last_ack_received)
+                    {
+                        duplicate_ack_count++;
+                        if (duplicate_ack_count == 3)
+                        {
+                            std::cout << "3 duplicate ACKs received. Triggering Fast Retransmit for SEQ: " << ack_num << std::endl;
+
+                            auto it = unacked_packets.find(ack_num);
+                            if (it != unacked_packets.end())
+                            {
+                                auto &in_flight_packet = it->second;
+
+                                std::vector<char> packet_buffer;
+                                in_flight_packet.packet.serialize(packet_buffer);
+                                sendto(main_sockfd, packet_buffer.data(), packet_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+                                in_flight_packet.send_time = std::chrono::steady_clock::now();
+                            }
+                            duplicate_ack_count = 0;
+                        }
                     }
                 }
             }
