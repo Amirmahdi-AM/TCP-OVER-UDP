@@ -54,7 +54,12 @@ size_t Connection::receive(std::vector<char> &buffer, size_t max_len)
 }
 
 void Connection::close() { /* TODO */ }
-void Connection::process_incoming_packet(const Packet &packet) { /* TODO */ }
+void Connection::process_incoming_packet(const Packet &packet)
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    incoming_packet_queue.push(packet);
+    cv_send.notify_one();
+}
 void Connection::_manager_entry()
 {
     const size_t MSS = 1400;
@@ -64,11 +69,55 @@ void Connection::_manager_entry()
         std::unique_lock<std::mutex> lock(mtx);
 
         cv_send.wait(lock, [this]
-                     { return !send_buffer.empty() || !active; });
+                     { return !send_buffer.empty() || !incoming_packet_queue.empty() || !active; });
 
         if (!active && send_buffer.empty())
         {
             break;
+        }
+
+        while (!incoming_packet_queue.empty())
+        {
+            Packet packet = incoming_packet_queue.front();
+            incoming_packet_queue.pop();
+
+            if (packet.data_length > 0)
+            {
+                if (packet.seq_num == next_seq_num_to_expect)
+                {
+                    receive_buffer_in_order.append(packet.payload.begin(), packet.payload.end());
+                    next_seq_num_to_expect += packet.data_length;
+
+                    while (receive_buffer_ooo.count(next_seq_num_to_expect))
+                    {
+                        Packet &ooo_packet = receive_buffer_ooo.at(next_seq_num_to_expect);
+                        receive_buffer_in_order.append(packet.payload.begin(), packet.payload.end());
+                        next_seq_num_to_expect += ooo_packet.data_length;
+                        receive_buffer_ooo.erase(ooo_packet.seq_num);
+                    }
+
+                    cv_receive.notify_one();
+                }
+                else if (packet.seq_num > next_seq_num_to_expect)
+                {
+                    receive_buffer_ooo[packet.seq_num] = packet;
+                }
+
+                Packet ack_packet;
+                ack_packet.flags = ACK;
+                ack_packet.ack_num = next_seq_num_to_expect;
+
+                lock.unlock();
+                std::vector<char> ack_buffer;
+                ack_packet.serialize(ack_buffer);
+                sendto(main_sockfd, ack_buffer.data(), ack_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+                lock.lock();
+            }
+
+            if (packet.flags & ACK)
+            {
+                /* TODO */
+            }
         }
 
         while (!send_buffer.empty())

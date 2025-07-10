@@ -8,6 +8,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <netinet/in.h>
+#include <queue>
 #include "Packet.h"
 
 enum class ConnectionState
@@ -45,6 +46,7 @@ private:
     std::deque<char> send_buffer;
     std::map<uint32_t, Packet> receive_buffer_ooo;
     std::string receive_buffer_in_order;
+    std::queue<Packet> incoming_packet_queue;
 
     uint32_t next_seq_num_to_send;
     uint32_t last_ack_received;
