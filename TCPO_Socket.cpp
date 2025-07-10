@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <cstring>
 #include "Packet.h"
+#include <string>
 
 TCPO_Socket::TCPO_Socket()
 {
@@ -81,13 +82,31 @@ void TCPO_Socket::_listener_entry()
             continue;
         }
 
+        std::string client_key = std::string(inet_ntoa(client_addr.sin_addr)) + ":" + std::to_string(ntohs(client_addr.sin_port));
+
         std::vector<char> packet_data(buffer, buffer + bytes_received);
         Packet received_packet;
         received_packet.deserialize(packet_data);
 
-        if (received_packet.flags & SYN)
+        std::shared_ptr<Connection> connection = nullptr;
+
         {
-            std::cout << "SYN Packet received from a client." << std::endl;
+            std::lock_guard<std::mutex> lock(connection_mutex);
+            auto it = active_connections.find(client_key);
+            if (it != active_connections.end())
+            {
+                connection = it->second;
+            }
+        }
+
+        if (connection)
+        {
+            connection->process_incoming_packet(received_packet);
+        }
+
+        else if (received_packet.flags & SYN)
+        {
+            std::cout << "SYN packet received from a new client: " << client_key << std::endl;
 
             std::unique_lock<std::mutex> lock(queue_mutex);
             if (accept_queue.size() >= backlog_size)
@@ -115,6 +134,11 @@ void TCPO_Socket::_listener_entry()
                     auto new_connection = std::make_shared<Connection>(sockfd, client_addr);
                     new_connection->start();
 
+                    {
+                        std::lock_guard<std::mutex> conn_lock(connection_mutex);
+                        active_connections[client_key] = new_connection;
+                    }
+
                     lock.lock();
                     accept_queue.push({new_connection, client_addr});
                     lock.unlock();
@@ -122,6 +146,10 @@ void TCPO_Socket::_listener_entry()
                     cv.notify_one();
                 }
             }
+        }
+        else
+        {
+            std::cout << "Received an unknown packet from " << client_key << std::endl;
         }
     }
 }

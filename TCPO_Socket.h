@@ -8,6 +8,7 @@
 #include <queue>
 #include <utility>
 #include "Connection.h"
+#include <map>
 
 
 class TCPO_Socket
@@ -35,4 +36,7 @@ private:
     
     std::mutex queue_mutex;
     std::condition_variable cv;
+
+    std::map<std::string, std::shared_ptr<Connection>> active_connections;
+    std::mutex connection_mutex;
 };

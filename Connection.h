@@ -27,7 +27,7 @@ public:
     ~Connection();
 
     void send(const std::vector<char> &data);
-    void receive();
+    size_t receive(std::vector<char> &buffer, size_t max_len);
 
     void start();
     void close();
