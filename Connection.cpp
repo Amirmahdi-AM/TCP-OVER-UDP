@@ -136,57 +136,92 @@ void Connection::_manager_entry()
             if (packet.flags & ACK)
             {
                 uint32_t ack_num = packet.ack_num;
-                for (auto it = unacked_packets.begin(); it != unacked_packets.end();)
+
+                if (ack_num > last_ack_received)
                 {
-                    if (it->first < ack_num)
+                    last_ack_received = ack_num;
+                    for (auto it = unacked_packets.begin(); it != unacked_packets.end();)
                     {
-                        it = unacked_packets.erase(it);
+                        if (it->first < ack_num)
+                        {
+                            it = unacked_packets.erase(it);
+                        }
+                        else
+                        {
+                            ++it;
+                        }
                     }
-                    else
+                    duplicate_ack_count = 0;
+                }
+                else if (ack_num == last_ack_received)
+                {
+                    duplicate_ack_count++;
+                    if (duplicate_ack_count == 3)
                     {
-                        ++it;
+                        std::cout << "3 duplicate ACKs received. Triggering Fast Retransmit for SEQ: " << ack_num << std::endl;
+
+                        auto it = unacked_packets.find(ack_num);
+                        if (it != unacked_packets.end())
+                        {
+                            auto &in_flight_packet = it->second;
+
+                            std::vector<char> packet_buffer;
+                            in_flight_packet.packet.serialize(packet_buffer);
+                            sendto(main_sockfd, packet_buffer.data(), packet_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+                            in_flight_packet.send_time = std::chrono::steady_clock::now();
+                        }
+                        duplicate_ack_count = 0;
                     }
                 }
-                last_ack_received = ack_num;
             }
         }
 
-        while (!send_buffer.empty())
+        const size_t WINDOW_SIZE_PACKETS = 10;
+
+        if (unacked_packets.size() < WINDOW_SIZE_PACKETS)
         {
-            size_t chunk_size = std::min(send_buffer.size(), MSS);
-            std::vector<char> payload(chunk_size);
-
-            for (size_t i = 0; i < chunk_size; i++)
+            while (!send_buffer.empty())
             {
-                payload[i] = send_buffer.front();
-                send_buffer.pop_front();
+                if (unacked_packets.size() >= WINDOW_SIZE_PACKETS)
+                {
+                    break;
+                }
+                size_t chunk_size = std::min(send_buffer.size(), MSS);
+                std::vector<char> payload(chunk_size);
+
+                for (size_t i = 0; i < chunk_size; i++)
+                {
+                    payload[i] = send_buffer.front();
+                    send_buffer.pop_front();
+                }
+
+                Packet data_packet;
+                data_packet.payload = payload;
+                data_packet.data_length = payload.size();
+                data_packet.seq_num = next_seq_num_to_send;
+
+                data_packet.ack_num = next_seq_num_to_expect;
+                data_packet.flags = ACK;
+
+                InFlightPacket in_flight_packet;
+                in_flight_packet.packet = data_packet;
+                in_flight_packet.send_time = std::chrono::steady_clock::now();
+
+                unacked_packets[data_packet.seq_num] = in_flight_packet;
+
+                lock.unlock();
+
+                std::vector<char> packet_buffer;
+                data_packet.serialize(packet_buffer);
+
+                sendto(main_sockfd, packet_buffer.data(), packet_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+                std::cout << "Sent a packet of " << data_packet.data_length << " bytes. SEQ: " << data_packet.seq_num << std::endl;
+
+                next_seq_num_to_send += data_packet.data_length;
+
+                lock.lock();
             }
-
-            Packet data_packet;
-            data_packet.payload = payload;
-            data_packet.data_length = payload.size();
-            data_packet.seq_num = next_seq_num_to_send;
-
-            data_packet.ack_num = next_seq_num_to_expect;
-            data_packet.flags = ACK;
-
-            InFlightPacket in_flight_packet;
-            in_flight_packet.packet = data_packet;
-            in_flight_packet.send_time = std::chrono::steady_clock::now();
-
-            unacked_packets[data_packet.seq_num] = in_flight_packet;
-
-            lock.unlock();
-
-            std::vector<char> packet_buffer;
-            data_packet.serialize(packet_buffer);
-
-            sendto(main_sockfd, packet_buffer.data(), packet_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
-            std::cout << "Sent a packet of " << data_packet.data_length << " bytes. SEQ: " << data_packet.seq_num << std::endl;
-
-            next_seq_num_to_send += data_packet.data_length;
-
-            lock.lock();
         }
     }
 }

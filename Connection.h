@@ -42,7 +42,7 @@ private:
         Packet packet;
         std::chrono::steady_clock::time_point send_time;
     };
-    
+
     void _manager_entry();
 
     int main_sockfd;
@@ -59,6 +59,8 @@ private:
     uint32_t next_seq_num_to_send;
     uint32_t last_ack_received;
     uint32_t next_seq_num_to_expect;
+    uint32_t duplicate_ack_count;
+    uint32_t last_ack_num_for_retransmit;
 
     std::thread manager_thread;
     std::mutex mtx;
