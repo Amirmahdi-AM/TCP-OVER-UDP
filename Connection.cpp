@@ -63,17 +63,36 @@ void Connection::process_incoming_packet(const Packet &packet)
 void Connection::_manager_entry()
 {
     const size_t MSS = 1400;
+    const auto RTO = std::chrono::seconds(1);
 
     while (active)
     {
         std::unique_lock<std::mutex> lock(mtx);
 
-        cv_send.wait(lock, [this]
-                     { return !send_buffer.empty() || !incoming_packet_queue.empty() || !active; });
+        cv_send.wait_for(lock, std::chrono::milliseconds(100), [this]
+                         { return !send_buffer.empty() || !incoming_packet_queue.empty() || !active; });
 
-        if (!active && send_buffer.empty())
+        if (!active)
         {
             break;
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        for (auto &pair : unacked_packets)
+        {
+            auto &in_flight_packet = pair.second;
+            auto time_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - in_flight_packet.send_time);
+
+            if (time_elapsed > RTO)
+            {
+                std::cout << "Timeout for packet SEQ: " << in_flight_packet.packet.seq_num << ". Resending." << std::endl;
+
+                std::vector<char> packet_buffer;
+                in_flight_packet.packet.serialize(packet_buffer);
+                sendto(main_sockfd, packet_buffer.data(), packet_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+                in_flight_packet.send_time = now;
+            }
         }
 
         while (!incoming_packet_queue.empty())
@@ -116,7 +135,19 @@ void Connection::_manager_entry()
 
             if (packet.flags & ACK)
             {
-                /* TODO */
+                uint32_t ack_num = packet.ack_num;
+                for (auto it = unacked_packets.begin(); it != unacked_packets.end();)
+                {
+                    if (it->first < ack_num)
+                    {
+                        it = unacked_packets.erase(it);
+                    }
+                    else
+                    {
+                        ++it;
+                    }
+                }
+                last_ack_received = ack_num;
             }
         }
 
@@ -138,6 +169,12 @@ void Connection::_manager_entry()
 
             data_packet.ack_num = next_seq_num_to_expect;
             data_packet.flags = ACK;
+
+            InFlightPacket in_flight_packet;
+            in_flight_packet.packet = data_packet;
+            in_flight_packet.send_time = std::chrono::steady_clock::now();
+
+            unacked_packets[data_packet.seq_num] = in_flight_packet;
 
             lock.unlock();
 

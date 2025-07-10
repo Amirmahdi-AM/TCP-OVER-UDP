@@ -10,6 +10,7 @@
 #include <netinet/in.h>
 #include <queue>
 #include "Packet.h"
+#include <chrono>
 
 enum class ConnectionState
 {
@@ -36,6 +37,12 @@ public:
     void process_incoming_packet(const Packet &packet);
 
 private:
+    struct InFlightPacket
+    {
+        Packet packet;
+        std::chrono::steady_clock::time_point send_time;
+    };
+    
     void _manager_entry();
 
     int main_sockfd;
@@ -47,6 +54,7 @@ private:
     std::map<uint32_t, Packet> receive_buffer_ooo;
     std::string receive_buffer_in_order;
     std::queue<Packet> incoming_packet_queue;
+    std::map<uint32_t, InFlightPacket> unacked_packets;
 
     uint32_t next_seq_num_to_send;
     uint32_t last_ack_received;
