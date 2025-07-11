@@ -234,6 +234,10 @@ bool TCPO_Socket::connect(const std::string &ip_address, uint16_t port)
                 sendto(sockfd, ack_buffer.data(), ack_buffer.size(), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
 
                 std::cout << "Connection established with server." << std::endl;
+
+                client_connection = std::make_shared<Connection>(sockfd, server_addr);
+                client_connection->start();
+
                 tv.tv_sec = 0;
                 setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
                 return true;
@@ -246,4 +250,27 @@ bool TCPO_Socket::connect(const std::string &ip_address, uint16_t port)
     tv.tv_sec = 0;
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
     return false;
+}
+
+void TCPO_Socket::send(const std::vector<char> &data)
+{
+    if (client_connection)
+    {
+        client_connection->send(data);
+    }
+    else
+    {
+        std::cerr << "Error: Cannot send data. Not connected." << std::endl;
+    }
+}
+
+size_t TCPO_Socket::receive(std::vector<char> &buffer, size_t max_len)
+{
+    if (client_connection)
+    {
+        return client_connection->receive(buffer, max_len);
+    }
+
+    std::cerr << "Error: Cannot receive data. Not connected." << std::endl;
+    return 0;
 }

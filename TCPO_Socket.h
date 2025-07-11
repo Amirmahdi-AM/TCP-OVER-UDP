@@ -24,6 +24,9 @@ public:
 
     bool connect(const std::string &ip_address, uint16_t port);
 
+    void send(const std::vector<char> &data);
+    size_t receive(std::vector<char> &buffer, size_t max_len);
+
 private:
     int sockfd;
     bool is_listening = false;
@@ -39,4 +42,6 @@ private:
 
     std::map<std::string, std::shared_ptr<Connection>> active_connections;
     std::mutex connection_mutex;
+
+    std::shared_ptr<Connection> client_connection;
 };
