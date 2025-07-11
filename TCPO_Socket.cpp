@@ -5,6 +5,7 @@
 #include <cstring>
 #include "Packet.h"
 #include <string>
+#include <random>
 
 TCPO_Socket::TCPO_Socket()
 {
@@ -120,6 +121,14 @@ void TCPO_Socket::_listener_entry()
             syn_ack_packet.flags = SYN | ACK;
             syn_ack_packet.dest_port = received_packet.src_port;
 
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<uint32_t> distrib;
+
+            uint32_t initial_seq_num = distrib(gen);
+            syn_ack_packet.seq_num = initial_seq_num;
+            syn_ack_packet.ack_num = received_packet.seq_num + 1;
+
             std::vector<char> syn_ack_buffer;
             syn_ack_packet.serialize(syn_ack_buffer);
             sendto(sockfd, syn_ack_buffer.data(), syn_ack_buffer.size(), 0, (struct sockaddr *)&client_addr, addr_len);
@@ -170,6 +179,15 @@ std::pair<std::shared_ptr<Connection>, sockaddr_in> TCPO_Socket::accept()
 
 bool TCPO_Socket::connect(const std::string &ip_address, uint16_t port)
 {
+    struct timeval tv;
+    tv.tv_sec = 2;
+    tv.tv_usec = 0;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv) < 0)
+    {
+        perror("setsockopt failed");
+        return false;
+    }
+
     sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -178,37 +196,54 @@ bool TCPO_Socket::connect(const std::string &ip_address, uint16_t port)
 
     Packet syn_packet;
     syn_packet.flags = SYN;
-    syn_packet.seq_num = 100;
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<uint32_t> distrib;
+
+    uint32_t initial_seq_num = distrib(gen);
+    syn_packet.seq_num = initial_seq_num;
 
     std::vector<char> syn_buffer;
     syn_packet.serialize(syn_buffer);
 
-    sendto(sockfd, syn_buffer.data(), syn_buffer.size(), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
-    std::cout << "SYN packet sent." << std::endl;
-
-    char buffer[4096];
-    socklen_t addr_len = sizeof(server_addr);
-    int bytes_received = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&server_addr, &addr_len);
-
-    if (bytes_received > 0)
+    const int MAX_RETRIES = 3;
+    for (int i = 0; i < MAX_RETRIES; i++)
     {
-        Packet response_packet;
-        response_packet.deserialize(std::vector<char>(buffer, buffer + bytes_received));
+        sendto(sockfd, syn_buffer.data(), syn_buffer.size(), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+        std::cout << "SYN sent (Attempt " << i + 1 << ")" << std::endl;
 
-        if (response_packet.flags == (SYN | ACK))
+        char buffer[4096];
+        socklen_t addr_len = sizeof(server_addr);
+        int bytes_received = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&server_addr, &addr_len);
+
+        if (bytes_received > 0)
         {
-            Packet ack_packet;
-            ack_packet.flags = ACK;
+            Packet response_packet;
+            response_packet.deserialize(std::vector<char>(buffer, buffer + bytes_received));
 
-            std::vector<char> ack_buffer;
-            ack_packet.serialize(ack_buffer);
-            sendto(sockfd, ack_buffer.data(), ack_buffer.size(), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+            if (response_packet.flags == (SYN | ACK))
+            {
+                Packet ack_packet;
+                ack_packet.flags = ACK;
+                ack_packet.seq_num = initial_seq_num + 1;
+                ack_packet.ack_num = response_packet.seq_num + 1;
 
-            std::cout << "Connection established with server." << std::endl;
-            return true;
+                std::vector<char> ack_buffer;
+                ack_packet.serialize(ack_buffer);
+                sendto(sockfd, ack_buffer.data(), ack_buffer.size(), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+
+                std::cout << "Connection established with server." << std::endl;
+                tv.tv_sec = 0;
+                setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
+                return true;
+            }
         }
+        std::cout << "Timeout, retrying..." << std::endl;
     }
 
     std::cout << "Connection failed." << std::endl;
+    tv.tv_sec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
     return false;
 }
