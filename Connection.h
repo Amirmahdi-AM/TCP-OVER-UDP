@@ -38,6 +38,8 @@ public:
 
     void process_incoming_packet(const Packet &packet);
 
+    bool is_closed() const;
+
 private:
     struct InFlightPacket
     {

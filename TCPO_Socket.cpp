@@ -24,7 +24,7 @@ TCPO_Socket::~TCPO_Socket()
 {
     if (sockfd >= 0)
     {
-        close(sockfd);
+        ::close(sockfd);
         std::cout << "Socket FD " << sockfd << " closed." << std::endl;
     }
 }
@@ -64,6 +64,7 @@ bool TCPO_Socket::listen(int backlog)
     this->is_listening = true;
 
     listener_thread = std::thread(&TCPO_Socket::_listener_entry, this);
+    cleanup_thread = std::thread(&TCPO_Socket::_cleanup_entry, this);
 
     std::cout << "Server is now listening..." << std::endl;
     return true;
@@ -273,4 +274,42 @@ size_t TCPO_Socket::receive(std::vector<char> &buffer, size_t max_len)
 
     std::cerr << "Error: Cannot receive data. Not connected." << std::endl;
     return 0;
+}
+
+void TCPO_Socket::_cleanup_entry()
+{
+    while (socket_active)
+    {
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+
+        std::cout << "Cleanup thread running..." << std::endl;
+
+        std::lock_guard<std::mutex> lock(connection_mutex);
+
+        for (auto it = active_connections.begin(); it != active_connections.end();)
+        {
+            if (it->second->is_closed())
+            {
+                std::cout << "Removing closed connection for client: " << it->first << std::endl;
+                it = active_connections.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+}
+
+void TCPO_Socket::close()
+{
+    if (client_connection)
+    {
+        client_connection->close();
+    }
+    else if (is_listening)
+    {
+        is_listening = false;
+        socket_active = false;
+    }
 }

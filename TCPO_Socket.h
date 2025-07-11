@@ -26,6 +26,7 @@ public:
 
     void send(const std::vector<char> &data);
     size_t receive(std::vector<char> &buffer, size_t max_len);
+    void close();
 
 private:
     int sockfd;
@@ -44,4 +45,7 @@ private:
     std::mutex connection_mutex;
 
     std::shared_ptr<Connection> client_connection;
+    std::thread cleanup_thread;
+    void _cleanup_entry();
+    bool socket_active;
 };

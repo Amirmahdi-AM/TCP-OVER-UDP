@@ -181,7 +181,7 @@ void Connection::_manager_entry()
                 }
                 else if (state == ConnectionState::FIN_WAIT_2)
                 {
-                    state = ConnectionState::TIME_WAIT;
+                    state = ConnectionState::CLOSED;
 
                     Packet ack_packet;
                     ack_packet.flags = ACK;
@@ -343,4 +343,9 @@ void Connection::_manager_entry()
             }
         }
     }
+}
+
+bool Connection::is_closed() const
+{
+    return state == ConnectionState::CLOSED;
 }
