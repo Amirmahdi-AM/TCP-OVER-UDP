@@ -2,6 +2,9 @@
 #include <cstring>
 #include <arpa/inet.h>
 
+Packet::Packet() : src_port(0), dest_port(0), seq_num(0), ack_num(0),
+                   flags(0), window_size(0), data_length(0) {}
+
 void Packet::serialize(std::vector<char> &buffer) const
 {
     const size_t header_size = sizeof(src_port) + sizeof(dest_port) + sizeof(seq_num) + sizeof(ack_num) + sizeof(flags) + sizeof(window_size) + sizeof(data_length);

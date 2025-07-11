@@ -9,6 +9,7 @@
 #include <utility>
 #include "Connection.h"
 #include <map>
+#include <memory>
 
 
 class TCPO_Socket
@@ -42,7 +43,7 @@ private:
     std::condition_variable cv;
 
     std::map<std::string, std::shared_ptr<Connection>> active_connections;
-    std::mutex connection_mutex;
+    std::mutex connections_mutex;
 
     std::shared_ptr<Connection> client_connection;
     std::thread cleanup_thread;

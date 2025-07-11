@@ -3,12 +3,21 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-Connection::Connection(int main_sockfd, const sockaddr_in &peer_addr)
+Connection::Connection(int main_sockfd, const sockaddr_in &peer_addr, uint32_t initial_send_seq, uint32_t initial_expect_seq)
     : main_sockfd(main_sockfd), peer_addr(peer_addr), state(ConnectionState::ESTABLISHED),
-      active(false), next_seq_num_to_send(1000), last_ack_received(1000), next_seq_num_to_expect(2000) {}
+      active(false),
+      next_seq_num_to_send(initial_send_seq),
+      last_ack_received(initial_send_seq), 
+      next_seq_num_to_expect(initial_expect_seq)
+{
+}
+
 Connection::~Connection()
 {
     active = false;
+
+    cv_send.notify_one();
+
     if (manager_thread.joinable())
     {
         manager_thread.join();
@@ -88,6 +97,9 @@ void Connection::close()
         fin_packet.seq_num = next_seq_num_to_send;
         fin_packet.ack_num = next_seq_num_to_expect;
 
+        fin_sent_seq = fin_packet.seq_num;
+        next_seq_num_to_send++;
+
         lock.unlock();
 
         std::vector<char> buffer;
@@ -97,12 +109,14 @@ void Connection::close()
         std::cout << "Sent FIN packet from CLOSE_WAIT." << std::endl;
     }
 }
+
 void Connection::process_incoming_packet(const Packet &packet)
 {
     std::lock_guard<std::mutex> lock(mtx);
     incoming_packet_queue.push(packet);
     cv_send.notify_one();
 }
+
 void Connection::_manager_entry()
 {
     const size_t MSS = 1400;
@@ -132,7 +146,12 @@ void Connection::_manager_entry()
 
                 std::vector<char> packet_buffer;
                 in_flight_packet.packet.serialize(packet_buffer);
+
+                lock.unlock();
+
                 sendto(main_sockfd, packet_buffer.data(), packet_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+                lock.lock();
 
                 in_flight_packet.send_time = now;
             }
@@ -158,7 +177,12 @@ void Connection::_manager_entry()
 
                     std::vector<char> buffer;
                     ack_packet.serialize(buffer);
+
+                    lock.unlock();
+
                     sendto(main_sockfd, buffer.data(), buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+                    lock.lock();
 
                     cv_receive.notify_all();
                 }
@@ -208,7 +232,7 @@ void Connection::_manager_entry()
                     while (receive_buffer_ooo.count(next_seq_num_to_expect))
                     {
                         Packet &ooo_packet = receive_buffer_ooo.at(next_seq_num_to_expect);
-                        receive_buffer_in_order.append(packet.payload.begin(), packet.payload.end());
+                        receive_buffer_in_order.append(ooo_packet.payload.begin(), ooo_packet.payload.end());
                         next_seq_num_to_expect += ooo_packet.data_length;
                         receive_buffer_ooo.erase(ooo_packet.seq_num);
                     }
@@ -285,7 +309,12 @@ void Connection::_manager_entry()
 
                                 std::vector<char> packet_buffer;
                                 in_flight_packet.packet.serialize(packet_buffer);
+
+                                lock.unlock();
+
                                 sendto(main_sockfd, packet_buffer.data(), packet_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+                                lock.lock();
 
                                 in_flight_packet.send_time = std::chrono::steady_clock::now();
                             }
@@ -347,5 +376,6 @@ void Connection::_manager_entry()
 
 bool Connection::is_closed() const
 {
+    std::lock_guard<std::mutex> lock(mtx);
     return state == ConnectionState::CLOSED;
 }

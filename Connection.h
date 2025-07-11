@@ -27,7 +27,7 @@ class Connection
 {
     
 public:
-    Connection(int main_sockfd, const sockaddr_in &peer_addr);
+    Connection(int main_sockfd, const sockaddr_in &peer_addr, uint32_t initial_send_seq, uint32_t initial_expect_seq);
     ~Connection();
 
     void send(const std::vector<char> &data);
@@ -68,7 +68,7 @@ private:
     uint32_t fin_sent_seq;
 
     std::thread manager_thread;
-    std::mutex mtx;
+    mutable std::mutex mtx;
     std::condition_variable cv_send;
     std::condition_variable cv_receive;
 };

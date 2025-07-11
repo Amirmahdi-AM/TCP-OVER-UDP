@@ -6,15 +6,16 @@
 #include "Packet.h"
 #include <string>
 #include <random>
+#include <stdexcept>
 
 TCPO_Socket::TCPO_Socket()
+    : sockfd(-1), is_listening(false), backlog_size(0), socket_active(true)
 {
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 
     if (sockfd < 0)
     {
-        std::cerr << "Socket creation failed" << std::endl;
-        exit(EXIT_FAILURE);
+        throw std::runtime_error("Socket creation failed");
     }
 
     std::cout << "Socket created successfully. FD: " << sockfd << std::endl;
@@ -22,6 +23,18 @@ TCPO_Socket::TCPO_Socket()
 
 TCPO_Socket::~TCPO_Socket()
 {
+    is_listening = false;
+    socket_active = false;
+
+    if (listener_thread.joinable())
+    {
+        listener_thread.join();
+    }
+    if (cleanup_thread.joinable())
+    {
+        cleanup_thread.join();
+    }
+
     if (sockfd >= 0)
     {
         ::close(sockfd);
@@ -93,7 +106,7 @@ void TCPO_Socket::_listener_entry()
         std::shared_ptr<Connection> connection = nullptr;
 
         {
-            std::lock_guard<std::mutex> lock(connection_mutex);
+            std::lock_guard<std::mutex> lock(connections_mutex);
             auto it = active_connections.find(client_key);
             if (it != active_connections.end())
             {
@@ -118,6 +131,8 @@ void TCPO_Socket::_listener_entry()
             }
             lock.unlock();
 
+            uint32_t client_initial_seq = received_packet.seq_num;
+            
             Packet syn_ack_packet;
             syn_ack_packet.flags = SYN | ACK;
             syn_ack_packet.dest_port = received_packet.src_port;
@@ -128,24 +143,36 @@ void TCPO_Socket::_listener_entry()
 
             uint32_t initial_seq_num = distrib(gen);
             syn_ack_packet.seq_num = initial_seq_num;
-            syn_ack_packet.ack_num = received_packet.seq_num + 1;
+            syn_ack_packet.ack_num = client_initial_seq + 1;
 
             std::vector<char> syn_ack_buffer;
             syn_ack_packet.serialize(syn_ack_buffer);
             sendto(sockfd, syn_ack_buffer.data(), syn_ack_buffer.size(), 0, (struct sockaddr *)&client_addr, addr_len);
 
+            struct timeval tv;
+            tv.tv_sec = 2;
+            tv.tv_usec = 0;
+            setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
+            
             bytes_received = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&client_addr, &addr_len);
+
+            tv.tv_sec = 0;
+            setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
+
             if (bytes_received > 0)
             {
                 received_packet.deserialize(std::vector<char>(buffer, buffer + bytes_received));
                 if (received_packet.flags & ACK)
                 {
                     std::cout << "Final ACK received. Connection established.";
-                    auto new_connection = std::make_shared<Connection>(sockfd, client_addr);
+
+                    uint32_t server_isn = syn_ack_packet.seq_num;
+
+                    auto new_connection = std::make_shared<Connection>(sockfd, client_addr, server_isn + 1, client_initial_seq + 1);
                     new_connection->start();
 
                     {
-                        std::lock_guard<std::mutex> conn_lock(connection_mutex);
+                        std::lock_guard<std::mutex> conn_lock(connections_mutex);
                         active_connections[client_key] = new_connection;
                     }
 
@@ -236,7 +263,10 @@ bool TCPO_Socket::connect(const std::string &ip_address, uint16_t port)
 
                 std::cout << "Connection established with server." << std::endl;
 
-                client_connection = std::make_shared<Connection>(sockfd, server_addr);
+                uint32_t next_send_seq = initial_seq_num + 1;
+                uint32_t next_expect_seq = response_packet.seq_num + 1;
+
+                client_connection = std::make_shared<Connection>(sockfd, server_addr, next_send_seq, next_expect_seq);
                 client_connection->start();
 
                 tv.tv_sec = 0;
@@ -284,7 +314,7 @@ void TCPO_Socket::_cleanup_entry()
 
         std::cout << "Cleanup thread running..." << std::endl;
 
-        std::lock_guard<std::mutex> lock(connection_mutex);
+        std::lock_guard<std::mutex> lock(connections_mutex);
 
         for (auto it = active_connections.begin(); it != active_connections.end();)
         {
@@ -311,5 +341,19 @@ void TCPO_Socket::close()
     {
         is_listening = false;
         socket_active = false;
+
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        while (!accept_queue.empty())
+        {
+            auto conn_pair = accept_queue.front();
+            accept_queue.pop();
+            conn_pair.first->close();
+        }
+
+       if (sockfd >= 0)
+        {
+            ::close(sockfd);
+            sockfd = -1;
+        }
     }
 }
