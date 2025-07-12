@@ -268,6 +268,7 @@ bool TCPO_Socket::connect(const std::string &ip_address, uint16_t port)
 
                 client_connection = std::make_shared<Connection>(sockfd, server_addr, next_send_seq, next_expect_seq);
                 client_connection->start();
+                client_connection->start_receiver();
 
                 tv.tv_sec = 0;
                 setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);

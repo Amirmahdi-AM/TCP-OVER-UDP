@@ -7,7 +7,7 @@ Connection::Connection(int main_sockfd, const sockaddr_in &peer_addr, uint32_t i
     : main_sockfd(main_sockfd), peer_addr(peer_addr), state(ConnectionState::ESTABLISHED),
       active(false),
       next_seq_num_to_send(initial_send_seq),
-      last_ack_received(initial_send_seq), 
+      last_ack_received(initial_send_seq),
       next_seq_num_to_expect(initial_expect_seq)
 {
 }
@@ -28,6 +28,39 @@ void Connection::start()
 {
     active = true;
     manager_thread = std::thread(&Connection::_manager_entry, this);
+}
+
+void Connection::start_receiver()
+{
+    receiver_thread = std::thread(&::Connection::_client_receiver, this);
+}
+
+void Connection::_client_receiver()
+{
+    char buffer[4096];
+    sockaddr_in server_addr;
+    socklen_t addr_len = sizeof(server_addr);
+
+    while (!this->is_closed())
+    {
+        int bytes_received = recvfrom(main_sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&server_addr, &addr_len);
+        if (bytes_received <= 0)
+        {
+            continue;
+        }
+
+        if (server_addr.sin_addr.s_addr != this->peer_addr.sin_addr.s_addr || server_addr.sin_port != this->peer_addr.sin_port)
+        {
+            std::cout << "Received a packet from an unknown source. Ignoring." << std::endl;
+            continue;
+        }
+
+        std::vector<char> packet_data(buffer, buffer + bytes_received);
+        Packet received_packet;
+        received_packet.deserialize(packet_data);
+
+        this->process_incoming_packet(received_packet);
+    }
 }
 
 void Connection::send(const std::vector<char> &data)

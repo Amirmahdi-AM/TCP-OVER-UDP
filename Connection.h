@@ -40,6 +40,8 @@ public:
 
     bool is_closed() const;
 
+    void start_receiver();
+
 private:
     struct InFlightPacket
     {
@@ -48,6 +50,7 @@ private:
     };
 
     void _manager_entry();
+    void _client_receiver();
 
     int main_sockfd;
     sockaddr_in peer_addr;
@@ -71,4 +74,5 @@ private:
     mutable std::mutex mtx;
     std::condition_variable cv_send;
     std::condition_variable cv_receive;
+    std::thread receiver_thread;
 };
