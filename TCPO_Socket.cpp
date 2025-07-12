@@ -164,7 +164,7 @@ void TCPO_Socket::_listener_entry()
                 received_packet.deserialize(std::vector<char>(buffer, buffer + bytes_received));
                 if (received_packet.flags & ACK)
                 {
-                    std::cout << "Final ACK received. Connection established.";
+                    std::cout << "Final ACK received. Connection established." << std::endl;
 
                     uint32_t server_isn = syn_ack_packet.seq_num;
 
