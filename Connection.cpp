@@ -79,9 +79,9 @@ size_t Connection::receive(std::vector<char> &buffer, size_t max_len)
     std::unique_lock<std::mutex> lock(mtx);
 
     cv_receive.wait(lock, [this]
-                    { return !receive_buffer_in_order.empty() || !active; });
+                    { return !receive_buffer_in_order.empty() || state != ConnectionState::ESTABLISHED; });
 
-    if (!active && receive_buffer_in_order.empty())
+    if (state != ConnectionState::ESTABLISHED && receive_buffer_in_order.empty())
     {
         return 0;
     }
@@ -250,6 +250,8 @@ void Connection::_manager_entry()
                     std::vector<char> buffer;
                     ack_packet.serialize(buffer);
                     sendto(main_sockfd, buffer.data(), buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+                    std::cout << "Sent LAST_ACK. Connection CLOSED." << std::endl;
 
                     active = false;
                 }
