@@ -257,6 +257,7 @@ void Connection::_manager_entry()
 
             if (packet.data_length > 0 && state == ConnectionState::ESTABLISHED)
             {
+                std::cout << "Packet with SQE=" << packet.seq_num << " received" << std::endl;
                 if (packet.seq_num == next_seq_num_to_expect)
                 {
                     receive_buffer_in_order.append(packet.payload.begin(), packet.payload.end());
@@ -277,9 +278,11 @@ void Connection::_manager_entry()
                     receive_buffer_ooo[packet.seq_num] = packet;
                 }
 
+                std::cout << "Send a packet with ACK=" << next_seq_num_to_expect << std::endl;
                 Packet ack_packet;
                 ack_packet.flags = ACK;
                 ack_packet.ack_num = next_seq_num_to_expect;
+                ack_packet.seq_num = next_seq_num_to_send;
 
                 lock.unlock();
                 std::vector<char> ack_buffer;
@@ -314,6 +317,7 @@ void Connection::_manager_entry()
                 {
                     if (ack_num > last_ack_received)
                     {
+                        std::cout << "ACK " << ack_num << " received." << std::endl;
                         last_ack_received = ack_num;
                         for (auto it = unacked_packets.begin(); it != unacked_packets.end();)
                         {
