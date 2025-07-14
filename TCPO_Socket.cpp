@@ -77,7 +77,7 @@ bool TCPO_Socket::listen(int backlog)
     this->is_listening = true;
 
     listener_thread = std::thread(&TCPO_Socket::_listener_entry, this);
-    cleanup_thread = std::thread(&TCPO_Socket::_cleanup_entry, this);
+    // cleanup_thread = std::thread(&TCPO_Socket::_cleanup_entry, this);
 
     std::cout << "Server is now listening..." << std::endl;
     return true;
@@ -150,7 +150,7 @@ void TCPO_Socket::_listener_entry()
             sendto(sockfd, syn_ack_buffer.data(), syn_ack_buffer.size(), 0, (struct sockaddr *)&client_addr, addr_len);
 
             struct timeval tv;
-            tv.tv_sec = 2;
+            tv.tv_sec = 20;
             tv.tv_usec = 0;
             setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
             
@@ -208,7 +208,7 @@ std::pair<std::shared_ptr<Connection>, sockaddr_in> TCPO_Socket::accept()
 bool TCPO_Socket::connect(const std::string &ip_address, uint16_t port)
 {
     struct timeval tv;
-    tv.tv_sec = 2;
+    tv.tv_sec = 20;
     tv.tv_usec = 0;
     if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv) < 0)
     {

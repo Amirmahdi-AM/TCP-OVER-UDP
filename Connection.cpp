@@ -153,13 +153,13 @@ void Connection::process_incoming_packet(const Packet &packet)
 void Connection::_manager_entry()
 {
     const size_t MSS = 1400;
-    const auto RTO = std::chrono::seconds(1);
+    const auto RTO = std::chrono::seconds(100000);
 
     while (active)
     {
         std::unique_lock<std::mutex> lock(mtx);
 
-        cv_send.wait_for(lock, std::chrono::milliseconds(100), [this]
+        cv_send.wait_for(lock, std::chrono::milliseconds(100000000), [this]
                          { return !send_buffer.empty() || !incoming_packet_queue.empty() || !active; });
 
         if (!active)
