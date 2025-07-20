@@ -2,13 +2,17 @@
 #include <iostream>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <cmath>
+
+const size_t MSS = 1400; // 1 & 3 & 4
 
 Connection::Connection(int main_sockfd, const sockaddr_in &peer_addr, uint32_t initial_send_seq, uint32_t initial_expect_seq)
     : main_sockfd(main_sockfd), peer_addr(peer_addr), state(ConnectionState::ESTABLISHED),
       active(false),
       next_seq_num_to_send(initial_send_seq),
       last_ack_received(initial_send_seq),
-      next_seq_num_to_expect(initial_expect_seq)
+      next_seq_num_to_expect(initial_expect_seq),
+      rwnd(MSS)
 {
 }
 
@@ -88,6 +92,20 @@ size_t Connection::receive(std::vector<char> &buffer, size_t max_len)
 
     size_t bytes_to_copy = std::min(max_len, receive_buffer_in_order.size());
 
+    if ((10 * MSS) - receive_buffer_in_order.size() < MSS && (10 * MSS + bytes_to_copy) - receive_buffer_in_order.size() >= MSS)
+    {
+        Packet ack_packet;
+        ack_packet.seq_num = next_seq_num_to_send;
+        ack_packet.ack_num = next_seq_num_to_expect;
+        ack_packet.flags = ACK;
+        ack_packet.window_size = (10 * MSS + bytes_to_copy) - receive_buffer_in_order.size();
+
+        std::vector<char> ack_buffer;
+        ack_packet.serialize(ack_buffer);
+
+        sendto(main_sockfd, ack_buffer.data(), ack_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+    }
+
     buffer.assign(receive_buffer_in_order.begin(), receive_buffer_in_order.begin() + bytes_to_copy);
 
     receive_buffer_in_order.erase(0, bytes_to_copy);
@@ -152,8 +170,12 @@ void Connection::process_incoming_packet(const Packet &packet)
 
 void Connection::_manager_entry()
 {
-    const size_t MSS = 1400;
-    const auto RTO = std::chrono::seconds(100000);
+    auto RTO = std::chrono::milliseconds(100000000);
+    auto estimatedRTT = std::chrono::milliseconds(1000);
+    auto devRTT = std::chrono::milliseconds(0);
+
+    std::chrono::steady_clock::time_point probe_send_time;
+    auto ZWPT = std::chrono::milliseconds(0);
 
     while (active)
     {
@@ -187,6 +209,32 @@ void Connection::_manager_entry()
                 lock.lock();
 
                 in_flight_packet.send_time = now;
+            }
+        }
+
+        if (rwnd <= 0)
+        {
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - probe_send_time) > ZWPT)
+            {
+                Packet probe_packet;
+                probe_packet.seq_num = next_seq_num_to_send - 1;
+                probe_packet.ack_num = next_seq_num_to_expect;
+                probe_packet.flags = ACK;
+                probe_packet.window_size = (10 * MSS) - receive_buffer_in_order.size();
+                probe_packet.payload.resize(1);
+                probe_packet.payload[0] = 'P';
+
+                std::vector<char> probe_buffer;
+                probe_packet.serialize(probe_buffer);
+
+                lock.unlock();
+
+                sendto(main_sockfd, probe_buffer.data(), probe_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+
+                lock.lock();
+
+                probe_send_time = now;
+                ZWPT = ZWPT * 2;
             }
         }
 
@@ -280,11 +328,16 @@ void Connection::_manager_entry()
                     receive_buffer_ooo[packet.seq_num] = packet;
                 }
 
-                std::cout << "Send a packet with ACK=" << next_seq_num_to_expect << std::endl;
                 Packet ack_packet;
                 ack_packet.flags = ACK;
                 ack_packet.ack_num = next_seq_num_to_expect;
                 ack_packet.seq_num = next_seq_num_to_send;
+                ack_packet.window_size = (10 * MSS) - receive_buffer_in_order.size();
+                if (ack_packet.window_size < MSS)
+                {
+                    ack_packet.window_size = 0;
+                }
+                std::cout << "Send a packet with ACK=" << ack_packet.ack_num << " and window_size=" << ack_packet.window_size << std::endl;
 
                 lock.unlock();
                 std::vector<char> ack_buffer;
@@ -317,6 +370,20 @@ void Connection::_manager_entry()
 
                 else
                 {
+                    rwnd = packet.window_size;
+                    if (rwnd <= 0)
+                    {
+                        probe_send_time = now;
+                        if (ZWPT == std::chrono::milliseconds(0))
+                        {
+                            ZWPT = std::chrono::milliseconds(1000);
+                        }
+                    }
+                    else
+                    {
+                        ZWPT = std::chrono::milliseconds(0);
+                    }
+
                     if (ack_num > last_ack_received)
                     {
                         std::cout << "ACK " << ack_num << " received." << std::endl;
@@ -325,6 +392,11 @@ void Connection::_manager_entry()
                         {
                             if (it->first < ack_num)
                             {
+                                auto sampleRTT = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second.send_time);
+                                estimatedRTT = std::chrono::duration_cast<std::chrono::milliseconds>(0.875 * estimatedRTT + 0.125 * sampleRTT);
+                                devRTT = std::chrono::duration_cast<std::chrono::milliseconds>(0.75 * devRTT + 0.25 * abs(sampleRTT - estimatedRTT));
+                                RTO = std::chrono::duration_cast<std::chrono::milliseconds>(estimatedRTT + 4 * devRTT);
+                                
                                 it = unacked_packets.erase(it);
                             }
                             else
@@ -339,11 +411,11 @@ void Connection::_manager_entry()
                         duplicate_ack_count++;
                         if (duplicate_ack_count == 3)
                         {
-                            std::cout << "3 duplicate ACKs received. Triggering Fast Retransmit for SEQ: " << ack_num << std::endl;
 
                             auto it = unacked_packets.find(ack_num);
                             if (it != unacked_packets.end())
                             {
+                                std::cout << "3 duplicate ACKs received. Triggering Fast Retransmit for SEQ: " << ack_num << std::endl;
                                 auto &in_flight_packet = it->second;
 
                                 std::vector<char> packet_buffer;
@@ -362,6 +434,13 @@ void Connection::_manager_entry()
                     }
                 }
             }
+
+            if (packet.flags & RST)
+            {
+                state = ConnectionState::CLOSED;
+                active = false;
+                std::cout << "Connection CLOSED with RST falg." << std::endl;
+            }
         }
 
         const size_t WINDOW_SIZE_PACKETS = 10;
@@ -370,11 +449,12 @@ void Connection::_manager_entry()
         {
             while (!send_buffer.empty())
             {
-                if (unacked_packets.size() >= WINDOW_SIZE_PACKETS)
+                if (unacked_packets.size() >= WINDOW_SIZE_PACKETS || rwnd <= 0)
                 {
                     break;
                 }
                 size_t chunk_size = std::min(send_buffer.size(), MSS);
+                chunk_size = std::min((size_t)rwnd, chunk_size);
                 std::vector<char> payload(chunk_size);
 
                 for (size_t i = 0; i < chunk_size; i++)
@@ -387,9 +467,13 @@ void Connection::_manager_entry()
                 data_packet.payload = payload;
                 data_packet.data_length = payload.size();
                 data_packet.seq_num = next_seq_num_to_send;
-
                 data_packet.ack_num = next_seq_num_to_expect;
                 data_packet.flags = ACK;
+                data_packet.window_size = (10 * MSS) - receive_buffer_in_order.size();
+                if (data_packet.window_size < MSS)
+                {
+                    data_packet.window_size = 0;
+                }
 
                 InFlightPacket in_flight_packet;
                 in_flight_packet.packet = data_packet;
@@ -401,7 +485,7 @@ void Connection::_manager_entry()
 
                 std::vector<char> packet_buffer;
                 data_packet.serialize(packet_buffer);
-
+                // 1 & 3 & 4 if (payload[0] != '1')
                 sendto(main_sockfd, packet_buffer.data(), packet_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
                 std::cout << "Sent a packet of " << data_packet.data_length << " bytes. SEQ: " << data_packet.seq_num << std::endl;
 

@@ -69,6 +69,7 @@ private:
     uint32_t duplicate_ack_count;
     uint32_t last_ack_num_for_retransmit;
     uint32_t fin_sent_seq;
+    uint16_t rwnd;
 
     std::thread manager_thread;
     mutable std::mutex mtx;

@@ -10,7 +10,7 @@ void Packet::serialize(std::vector<char> &buffer) const
     const size_t header_size = sizeof(src_port) + sizeof(dest_port) + sizeof(seq_num) + sizeof(ack_num) + sizeof(flags) + sizeof(window_size) + sizeof(data_length);
 
     buffer.resize(header_size + payload.size());
-
+    
     char *ptr = buffer.data();
 
     uint16_t net_src_port = htons(src_port);
@@ -28,26 +28,34 @@ void Packet::serialize(std::vector<char> &buffer) const
     uint32_t net_ack_num = htonl(ack_num);
     memcpy(ptr, &net_ack_num, sizeof(net_ack_num));
     ptr += sizeof(net_ack_num);
-
+    
     memcpy(ptr, &flags, sizeof(flags));
     ptr += sizeof(flags);
-
+    
     uint16_t net_window_size = htons(window_size);
     memcpy(ptr, &net_window_size, sizeof(net_window_size));
     ptr += sizeof(net_window_size);
-
+    
     uint16_t net_data_length = htons(payload.size());
     memcpy(ptr, &net_data_length, sizeof(net_data_length));
     ptr += sizeof(net_data_length);
-
+    
     if (!payload.empty())
     {
         memcpy(ptr, payload.data(), payload.size());
     }
+    for (auto &c : buffer)
+    {
+        c = ~c;
+    }
 }
 
-void Packet::deserialize(const std::vector<char> &buffer)
+void Packet::deserialize(std::vector<char> &buffer)
 {
+    for (auto &c : buffer)
+    {
+        c = ~c;
+    }
     const char *ptr = buffer.data();
 
     uint16_t net_src_port;

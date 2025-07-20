@@ -26,5 +26,5 @@ public:
     std::vector<char> payload;
 
     void serialize(std::vector<char> &buffer) const;
-    void deserialize(const std::vector<char> &buffer);
+    void deserialize(std::vector<char> &buffer);
 };

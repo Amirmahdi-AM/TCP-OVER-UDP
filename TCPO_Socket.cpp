@@ -153,7 +153,7 @@ void TCPO_Socket::_listener_entry()
             tv.tv_sec = 20;
             tv.tv_usec = 0;
             setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
-            
+
             bytes_received = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&client_addr, &addr_len);
 
             tv.tv_sec = 0;
@@ -161,7 +161,8 @@ void TCPO_Socket::_listener_entry()
 
             if (bytes_received > 0)
             {
-                received_packet.deserialize(std::vector<char>(buffer, buffer + bytes_received));
+                std::vector<char> buff(buffer, buffer + bytes_received);
+                received_packet.deserialize(buff);
                 if (received_packet.flags & ACK)
                 {
                     std::cout << "Final ACK received. Connection established." << std::endl;
@@ -186,6 +187,11 @@ void TCPO_Socket::_listener_entry()
         }
         else
         {
+            Packet rst_packet;
+            rst_packet.flags = RST;
+            std::vector<char> rst_buffer;
+            rst_packet.serialize(rst_buffer);
+            sendto(sockfd, rst_buffer.data(), rst_buffer.size(), 0, (struct sockaddr *)&client_addr, addr_len);
             std::cout << "Received an unknown packet from " << client_key << std::endl;
         }
     }
@@ -248,7 +254,8 @@ bool TCPO_Socket::connect(const std::string &ip_address, uint16_t port)
         if (bytes_received > 0)
         {
             Packet response_packet;
-            response_packet.deserialize(std::vector<char>(buffer, buffer + bytes_received));
+            std::vector<char> buff(buffer, buffer + bytes_received);
+            response_packet.deserialize(buff);
 
             if (response_packet.flags == (SYN | ACK))
             {
@@ -351,7 +358,7 @@ void TCPO_Socket::close()
             conn_pair.first->close();
         }
 
-       if (sockfd >= 0)
+        if (sockfd >= 0)
         {
             ::close(sockfd);
             sockfd = -1;
