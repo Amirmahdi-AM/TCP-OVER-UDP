@@ -13,7 +13,8 @@ Connection::Connection(int main_sockfd, const sockaddr_in &peer_addr, uint32_t i
       last_ack_received(initial_send_seq),
       next_seq_num_to_expect(initial_expect_seq),
       rwnd(MSS),
-      cwnd(MSS)
+      cwnd(MSS),
+      bytes_in_slide_window(0)
 {
 }
 
@@ -179,7 +180,7 @@ void Connection::process_incoming_packet(const Packet &packet)
 
 void Connection::_manager_entry()
 {
-    auto RTO = std::chrono::milliseconds(100000000);
+    auto RTO = std::chrono::milliseconds(100);
     auto estimatedRTT = std::chrono::milliseconds(1000);
     auto devRTT = std::chrono::milliseconds(0);
 
@@ -193,7 +194,7 @@ void Connection::_manager_entry()
     {
         std::unique_lock<std::mutex> lock(mtx);
 
-        cv_send.wait_for(lock, std::chrono::milliseconds(100000000), [this]
+        cv_send.wait_for(lock, std::chrono::milliseconds(100), [this]
                          { return !send_buffer.empty() || !incoming_packet_queue.empty() || !active; });
 
         if (!active)
@@ -425,6 +426,7 @@ void Connection::_manager_entry()
                                 devRTT = std::chrono::duration_cast<std::chrono::milliseconds>(0.75 * devRTT + 0.25 * abs(sampleRTT - estimatedRTT));
                                 RTO = std::chrono::duration_cast<std::chrono::milliseconds>(estimatedRTT + 4 * devRTT);
 
+                                bytes_in_slide_window -= it->second.packet.data_length;
                                 it = unacked_packets.erase(it);
                             }
                             else
@@ -481,7 +483,7 @@ void Connection::_manager_entry()
         {
             while (!send_buffer.empty())
             {
-                if (unacked_packets.size() >= WINDOW_SIZE_PACKETS || rwnd <= 0)
+                if (unacked_packets.size() >= WINDOW_SIZE_PACKETS || bytes_in_slide_window >= rwnd || bytes_in_slide_window >= cwnd)
                 {
                     break;
                 }
@@ -513,6 +515,7 @@ void Connection::_manager_entry()
                 in_flight_packet.send_time = std::chrono::steady_clock::now();
 
                 unacked_packets[data_packet.seq_num] = in_flight_packet;
+                bytes_in_slide_window += chunk_size;
 
                 lock.unlock();
 

@@ -71,6 +71,7 @@ private:
     uint32_t fin_sent_seq;
     uint16_t rwnd;
     uint16_t cwnd;
+    uint16_t bytes_in_slide_window;
 
     std::thread manager_thread;
     mutable std::mutex mtx;
