@@ -12,7 +12,8 @@ Connection::Connection(int main_sockfd, const sockaddr_in &peer_addr, uint32_t i
       next_seq_num_to_send(initial_send_seq),
       last_ack_received(initial_send_seq),
       next_seq_num_to_expect(initial_expect_seq),
-      rwnd(MSS)
+      rwnd(MSS),
+      cwnd(MSS)
 {
 }
 
@@ -76,19 +77,27 @@ void Connection::send(const std::vector<char> &data)
     std::cout << data.size() << " bytes added to the send buffer." << std::endl;
 
     cv_send.notify_one();
+
+    latest_activity = std::chrono::steady_clock::now();
 }
 
 size_t Connection::receive(std::vector<char> &buffer, size_t max_len)
 {
     std::unique_lock<std::mutex> lock(mtx);
 
-    cv_receive.wait(lock, [this]
-                    { return !receive_buffer_in_order.empty() || state != ConnectionState::ESTABLISHED; });
+    cv_receive.wait_for(lock, std::chrono::minutes(5), [this]
+                        { return !receive_buffer_in_order.empty() || state != ConnectionState::ESTABLISHED; });
 
     if (state != ConnectionState::ESTABLISHED && receive_buffer_in_order.empty())
     {
+        return -1;
+    }
+    else if (receive_buffer_in_order.empty())
+    {
         return 0;
     }
+
+    latest_activity = std::chrono::steady_clock::now();
 
     size_t bytes_to_copy = std::min(max_len, receive_buffer_in_order.size());
 
@@ -177,6 +186,9 @@ void Connection::_manager_entry()
     std::chrono::steady_clock::time_point probe_send_time;
     auto ZWPT = std::chrono::milliseconds(0);
 
+    auto active_timer = std::chrono::minutes(10);
+    latest_activity = std::chrono::steady_clock::now();
+
     while (active)
     {
         std::unique_lock<std::mutex> lock(mtx);
@@ -209,6 +221,8 @@ void Connection::_manager_entry()
                 lock.lock();
 
                 in_flight_packet.send_time = now;
+
+                cwnd = MSS;
             }
         }
 
@@ -236,6 +250,11 @@ void Connection::_manager_entry()
                 probe_send_time = now;
                 ZWPT = ZWPT * 2;
             }
+        }
+
+        if (std::chrono::duration_cast<std::chrono::minutes>(now - latest_activity) > active_timer)
+        {
+            this->close();
         }
 
         while (!incoming_packet_queue.empty())
@@ -384,7 +403,16 @@ void Connection::_manager_entry()
                         ZWPT = std::chrono::milliseconds(0);
                     }
 
-                    if (ack_num > last_ack_received)
+                    if (ack_num > next_seq_num_to_send)
+                    {
+                        Packet rst_packet;
+                        rst_packet.flags = RST;
+                        std::vector<char> rst_buffer;
+                        rst_packet.serialize(rst_buffer);
+                        sendto(main_sockfd, rst_buffer.data(), rst_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+                    }
+
+                    else if (ack_num > last_ack_received)
                     {
                         std::cout << "ACK " << ack_num << " received." << std::endl;
                         last_ack_received = ack_num;
@@ -396,7 +424,7 @@ void Connection::_manager_entry()
                                 estimatedRTT = std::chrono::duration_cast<std::chrono::milliseconds>(0.875 * estimatedRTT + 0.125 * sampleRTT);
                                 devRTT = std::chrono::duration_cast<std::chrono::milliseconds>(0.75 * devRTT + 0.25 * abs(sampleRTT - estimatedRTT));
                                 RTO = std::chrono::duration_cast<std::chrono::milliseconds>(estimatedRTT + 4 * devRTT);
-                                
+
                                 it = unacked_packets.erase(it);
                             }
                             else
@@ -405,6 +433,8 @@ void Connection::_manager_entry()
                             }
                         }
                         duplicate_ack_count = 0;
+
+                        cwnd += MSS;
                     }
                     else if (ack_num == last_ack_received)
                     {
@@ -428,6 +458,8 @@ void Connection::_manager_entry()
                                 lock.lock();
 
                                 in_flight_packet.send_time = std::chrono::steady_clock::now();
+
+                                cwnd /= 2;
                             }
                             duplicate_ack_count = 0;
                         }
@@ -455,6 +487,7 @@ void Connection::_manager_entry()
                 }
                 size_t chunk_size = std::min(send_buffer.size(), MSS);
                 chunk_size = std::min((size_t)rwnd, chunk_size);
+                chunk_size = std::min((size_t)cwnd, chunk_size);
                 std::vector<char> payload(chunk_size);
 
                 for (size_t i = 0; i < chunk_size; i++)

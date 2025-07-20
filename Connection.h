@@ -70,10 +70,13 @@ private:
     uint32_t last_ack_num_for_retransmit;
     uint32_t fin_sent_seq;
     uint16_t rwnd;
+    uint16_t cwnd;
 
     std::thread manager_thread;
     mutable std::mutex mtx;
     std::condition_variable cv_send;
     std::condition_variable cv_receive;
     std::thread receiver_thread;
+
+    std::chrono::steady_clock::time_point latest_activity;
 };

@@ -9,7 +9,7 @@
 #include <stdexcept>
 
 TCPO_Socket::TCPO_Socket()
-    : sockfd(-1), is_listening(false), backlog_size(0), socket_active(true)
+    : sockfd(-1), is_listening(false), backlog_size(0), socket_active(true), is_working(true)
 {
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 
@@ -25,6 +25,7 @@ TCPO_Socket::~TCPO_Socket()
 {
     is_listening = false;
     socket_active = false;
+    is_working = false;
 
     if (listener_thread.joinable())
     {
@@ -89,7 +90,7 @@ void TCPO_Socket::_listener_entry()
     sockaddr_in client_addr;
     socklen_t addr_len = sizeof(client_addr);
 
-    while (is_listening)
+    while (is_working)
     {
         int bytes_received = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&client_addr, &addr_len);
         if (bytes_received <= 0)
@@ -119,7 +120,7 @@ void TCPO_Socket::_listener_entry()
             connection->process_incoming_packet(received_packet);
         }
 
-        else if (received_packet.flags & SYN)
+        else if (received_packet.flags & SYN && is_listening)
         {
             std::cout << "SYN packet received from a new client: " << client_key << std::endl;
 
@@ -132,7 +133,7 @@ void TCPO_Socket::_listener_entry()
             lock.unlock();
 
             uint32_t client_initial_seq = received_packet.seq_num;
-            
+
             Packet syn_ack_packet;
             syn_ack_packet.flags = SYN | ACK;
             syn_ack_packet.dest_port = received_packet.src_port;
@@ -201,8 +202,15 @@ std::pair<std::shared_ptr<Connection>, sockaddr_in> TCPO_Socket::accept()
 {
     std::unique_lock<std::mutex> lock(queue_mutex);
 
-    cv.wait(lock, [this]
-            { return !accept_queue.empty(); });
+    cv.wait_for(lock, std::chrono::minutes(5), [this]
+                { return !accept_queue.empty(); });
+
+    if (accept_queue.empty())
+    {
+        std::pair<std::shared_ptr<Connection>, sockaddr_in> null_connection;
+        null_connection.first = nullptr;
+        return null_connection;
+    }
 
     auto connection_info = accept_queue.front();
     accept_queue.pop();
@@ -316,11 +324,11 @@ size_t TCPO_Socket::receive(std::vector<char> &buffer, size_t max_len)
 
 void TCPO_Socket::_cleanup_entry()
 {
+    std::cout << "Cleanup thread running..." << std::endl;
+
     while (socket_active)
     {
         std::this_thread::sleep_for(std::chrono::seconds(5));
-
-        std::cout << "Cleanup thread running..." << std::endl;
 
         std::lock_guard<std::mutex> lock(connections_mutex);
 
@@ -358,10 +366,10 @@ void TCPO_Socket::close()
             conn_pair.first->close();
         }
 
-        if (sockfd >= 0)
+        /*if (sockfd >= 0)
         {
             ::close(sockfd);
             sockfd = -1;
-        }
+        }*/
     }
 }

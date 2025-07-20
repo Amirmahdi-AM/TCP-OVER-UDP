@@ -32,6 +32,7 @@ public:
 private:
     int sockfd;
     bool is_listening = false;
+    bool is_working = true;
 
     std::thread listener_thread;
     void _listener_entry();
