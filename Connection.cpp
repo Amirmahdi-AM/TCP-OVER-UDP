@@ -411,6 +411,9 @@ void Connection::_manager_entry()
                         std::vector<char> rst_buffer;
                         rst_packet.serialize(rst_buffer);
                         sendto(main_sockfd, rst_buffer.data(), rst_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
+                        state = ConnectionState::CLOSED;
+                        active = false;
+                        std::cout << "Connection was CLOSED with RST falg." << std::endl;
                     }
 
                     else if (ack_num > last_ack_received)
@@ -473,7 +476,7 @@ void Connection::_manager_entry()
             {
                 state = ConnectionState::CLOSED;
                 active = false;
-                std::cout << "Connection CLOSED with RST falg." << std::endl;
+                std::cout << "Connection was CLOSED with RST falg." << std::endl;
             }
         }
 
