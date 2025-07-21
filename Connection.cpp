@@ -180,7 +180,7 @@ void Connection::process_incoming_packet(const Packet &packet)
 
 void Connection::_manager_entry()
 {
-    auto RTO = std::chrono::milliseconds(100);
+    auto RTO = std::chrono::milliseconds(1000);
     auto estimatedRTT = std::chrono::milliseconds(1000);
     auto devRTT = std::chrono::milliseconds(0);
 
