@@ -171,7 +171,7 @@ void TCPO_Socket::_listener_entry()
                     uint32_t server_isn = syn_ack_packet.seq_num;
 
                     auto new_connection = std::make_shared<Connection>(sockfd, client_addr, server_isn + 1, client_initial_seq + 1);
-                    new_connection->start();
+                    // new_connection->start();
 
                     {
                         std::lock_guard<std::mutex> conn_lock(connections_mutex);
@@ -213,6 +213,7 @@ std::pair<std::shared_ptr<Connection>, sockaddr_in> TCPO_Socket::accept()
     }
 
     auto connection_info = accept_queue.front();
+    connection_info.first->start();
     accept_queue.pop();
 
     std::cout << "Connection accepted." << std::endl;
@@ -363,6 +364,7 @@ void TCPO_Socket::close()
         {
             auto conn_pair = accept_queue.front();
             accept_queue.pop();
+            conn_pair.first->start();
             conn_pair.first->close();
         }
 

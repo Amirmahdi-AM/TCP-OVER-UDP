@@ -174,7 +174,10 @@ void Connection::close()
 void Connection::process_incoming_packet(const Packet &packet)
 {
     std::lock_guard<std::mutex> lock(mtx);
-    incoming_packet_queue.push(packet);
+    if (active)
+    {
+        incoming_packet_queue.push(packet);
+    }
     cv_send.notify_one();
 }
 
