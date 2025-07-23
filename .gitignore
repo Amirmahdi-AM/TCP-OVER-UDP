@@ -1,4 +1,3 @@
 .vscode/
-server.cpp
-client.cpp
 output
+Scenario/

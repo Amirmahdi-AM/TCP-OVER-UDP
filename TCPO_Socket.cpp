@@ -78,7 +78,7 @@ bool TCPO_Socket::listen(int backlog)
     this->is_listening = true;
 
     listener_thread = std::thread(&TCPO_Socket::_listener_entry, this);
-    // cleanup_thread = std::thread(&TCPO_Socket::_cleanup_entry, this);
+    cleanup_thread = std::thread(&TCPO_Socket::_cleanup_entry, this);
 
     std::cout << "Server is now listening..." << std::endl;
     return true;
@@ -171,7 +171,6 @@ void TCPO_Socket::_listener_entry()
                     uint32_t server_isn = syn_ack_packet.seq_num;
 
                     auto new_connection = std::make_shared<Connection>(sockfd, client_addr, server_isn + 1, client_initial_seq + 1);
-                    // new_connection->start();
 
                     {
                         std::lock_guard<std::mutex> conn_lock(connections_mutex);
@@ -367,11 +366,5 @@ void TCPO_Socket::close()
             conn_pair.first->start();
             conn_pair.first->close();
         }
-
-        /*if (sockfd >= 0)
-        {
-            ::close(sockfd);
-            sockfd = -1;
-        }*/
     }
 }

@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <cmath>
 
-const size_t MSS = 1400; // 1 & 3 & 4
+const size_t MSS = 1400;
 
 Connection::Connection(int main_sockfd, const sockaddr_in &peer_addr, uint32_t initial_send_seq, uint32_t initial_expect_seq)
     : main_sockfd(main_sockfd), peer_addr(peer_addr), state(ConnectionState::ESTABLISHED),
@@ -527,7 +527,6 @@ void Connection::_manager_entry()
 
                 std::vector<char> packet_buffer;
                 data_packet.serialize(packet_buffer);
-                // 1 & 3 & 4 if (payload[0] != '1')
                 sendto(main_sockfd, packet_buffer.data(), packet_buffer.size(), 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
                 std::cout << "Sent a packet of " << data_packet.data_length << " bytes. SEQ: " << data_packet.seq_num << std::endl;
 
